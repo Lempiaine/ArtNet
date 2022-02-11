@@ -62,7 +62,12 @@ namespace artnet {
         NET = 15,
         LENGTH_H = 16,
         LENGTH_L = 17,
-        DATA = 18
+        DATA = 18,
+        IPPROG_IP = 16,
+        ADDRESS_NETSWITCH = 12,
+        ADDRESS_SUBNETSWITCH = 104,
+        ADDRESS_SWIN = 96,
+        ADDRESS_SWOUT = 100,
     };
 
     constexpr uint16_t IDX(Index i) {
@@ -302,6 +307,48 @@ namespace artnet {
                         op_code = OpCode::Poll;
                         break;
                     }
+                    case OPC(OpCode::IpProg): {
+                        memcpy(packet.data(), d, size);
+
+                        #ifdef ARTNET_ENABLE_ETHER
+                            Ethernet.setLocalIP(ipprog_newip());
+                            // TODO: Save new address to persistent memory
+                        #endif
+                        #ifdef ARTNET_ENABLE_WIFI
+                            WiFi.config(ipprog_newip()); 
+                        #endif 
+
+                        // TODO: IpProgReply
+
+                        op_code = OpCode::IpProg;
+                        break;
+                    }
+                    case OPC(OpCode::Address): {
+                        memcpy(packet.data(), d, size);
+
+                        // TODO: 0x7f should mean no change                     
+
+                        // Get previous start universes from callback map
+                        int8_t start_universe_diff = 0;
+                        if(!callbacks.empty()){
+                            start_universe_diff = (packet[100] & 0x0F) - callbacks.begin()->first;
+                        }
+
+                        // Update keys according to the difference to earlier start universe
+                        CallbackMap tempMap;
+                        for (auto& c : callbacks){
+                            tempMap[c.first + start_universe_diff] = c.second;
+                        }
+                        callbacks.clear();
+                        for (auto& c : tempMap){
+                            callbacks[c.first] = c.second;
+                        }
+
+                        poll_reply();
+
+                        op_code = OpCode::Address;
+                        break;
+                    }
                     default: {
                         if (b_verbose) {
                             Serial.print(F("Unsupported OpCode: "));
@@ -367,6 +414,18 @@ namespace artnet {
         inline uint8_t data(const uint16_t i) const {
             return packet[HEADER_SIZE + i];
         }
+        inline IPAddress ipprog_newip() const {
+            IPAddress ip(packet[IDX(Index::IPPROG_IP)], packet[IDX(Index::IPPROG_IP)+1], packet[IDX(Index::IPPROG_IP)+2], packet[IDX(Index::IPPROG_IP)+3]);
+            return ip;
+        }
+        inline uint16_t address_netswitch() const {
+            return packet[IDX(Index::ADDRESS_NETSWITCH)] & 0x0F;
+        }
+        inline uint16_t address_subnetswitch() const {
+            return packet[IDX(Index::ADDRESS_SUBNETSWITCH)] & 0x0F;
+        }
+
+
 
         template <typename Fn>
         inline auto subscribe(const uint8_t universe, Fn&& func) -> std::enable_if_t<arx::is_callable<Fn>::value> {
@@ -544,7 +603,7 @@ namespace artnet {
             size_t i = 0;
             for (const auto& pair : callbacks) {
                 r.sw_in[i] = pair.first & 0x0F;
-                r.sw_out[i] = i;          // dummy: output port is flexible
+                r.sw_out[i] = pair.first & 0x0F;          // dummy: output port is flexible
                 r.port_types[i] = 0xC0;   // I/O available by DMX512
                 r.good_input[i] = 0x80;   // Data received without error
                 r.good_output[i] = 0x80;  // Data transmitted without error
