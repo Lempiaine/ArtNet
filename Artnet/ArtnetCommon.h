@@ -144,6 +144,24 @@ namespace artnet {
         uint8_t b[239];
     };
 
+    union IpProgReply {
+        struct {
+            uint8_t id[8];
+            uint8_t op_code_l;
+            uint8_t op_code_h;
+            uint8_t ver_h;
+            uint8_t ver_l;
+            uint8_t spare[4];
+            uint8_t ip[4];
+            uint8_t subnetmask[4];
+            uint8_t port_l;
+            uint8_t port_h;
+            uint8_t status;
+            uint8_t filler[7];            
+        };
+        uint8_t b[34];
+    };
+
     template <typename S>
     class Sender_ {
         Array<PACKET_SIZE> packet;
@@ -308,6 +326,8 @@ namespace artnet {
                         break;
                     }
                     case OPC(OpCode::IpProg): {
+                        remote_ip = stream->S::remoteIP();
+                        remote_port = (uint16_t)stream->S::remotePort();
                         memcpy(packet.data(), d, size);
 
                         #ifdef ARTNET_ENABLE_ETHER
@@ -318,7 +338,7 @@ namespace artnet {
                             WiFi.config(ipprog_newip()); 
                         #endif 
 
-                        // TODO: IpProgReply
+                        ip_prog_reply();
 
                         op_code = OpCode::IpProg;
                         break;
@@ -623,6 +643,28 @@ namespace artnet {
             stream->beginPacket(local_broadcast_addr, DEFAULT_PORT);
             stream->write(r.b, sizeof(ArtPollReply));
             stream->endPacket();
+        }
+
+        void ip_prog_reply() {
+            IpProgReply r;
+            IPAddress my_ip = localIP();
+            IPAddress my_subnet = subnetMask();
+            for (size_t i = 0; i < ID_LENGTH; i++) r.id[i] = static_cast<uint8_t>(ID[i]);
+            r.op_code_l = ((uint16_t)OpCode::IpProgReply >> 0) & 0x00FF;
+            r.op_code_h = ((uint16_t)OpCode::IpProgReply >> 8) & 0x00FF;
+            r.ver_h = (PROTOCOL_VER >> 8) & 0x00FF;
+            r.ver_l = (PROTOCOL_VER >> 0) & 0x00FF;
+            memset(r.spare, 0x00, 5);
+            for (size_t i = 0; i < 4; ++i) r.ip[i] = my_ip[i];
+            for (size_t i = 0; i < 4; ++i) r.subnetmask[i] = my_subnet[i];
+            r.port_l = (DEFAULT_PORT >> 0) & 0xFF;
+            r.port_h = (DEFAULT_PORT >> 8) & 0xFF;
+            memset(r.status, 0x00, 1);
+            memset(r.filler, 0x00, 7);
+
+            stream->beginPacket(remote_ip, remote_port);
+            stream->write(r.b, sizeof(IpProgReply));
+            stream->endPacket();        
         }
 
 #ifdef ARTNET_ENABLE_WIFI
